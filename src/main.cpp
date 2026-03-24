@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <IRremote.h>
 
-#define IR_SEND_PIN 3 // Define your IR transmitter pin
+int IR_SEND_PIN = 3; // Define your IR transmitter pin
 int RECV_PIN = 11;    // define input pin on Arduino to which the IR receiver is connected
 int buzzerPin = 8;    // define output pin on Arduino to which the buzzer is connected
 int redLED = 9;     // define output pin on Arduino to which the red LED is connected
@@ -13,8 +13,8 @@ void setup()
 {
   // put your setup code here, to run once:
   pinMode(redLED, OUTPUT);
-  irrecv.enableIRIn();                              // Start the receiver
-  IrSender.begin(IR_SEND_PIN, ENABLE_LED_FEEDBACK); // Initialize IR sender
+  irrecv.enableIRIn();  // Start the receiver
+  IrSender.begin(IR_SEND_PIN); // Initialize IR sender
   Serial.begin(115200);
   Serial.println("Ready to send raw IR signal...");
 }
@@ -22,7 +22,7 @@ void setup()
 void loop()
 {
   // put your main code here, to run repeatedly:
-  if (irrecv.decode(&results))
+  if (IrReceiver.decode())
   {
     Serial.println(results.value, HEX);
     // Buzzer and red LED on when IR signal is received
