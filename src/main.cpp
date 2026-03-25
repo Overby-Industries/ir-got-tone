@@ -1,75 +1,92 @@
 #include <Arduino.h>
 #include <IRremote.h>
+#include <avr/wdt.h>       // Watchdog timer
 
-const int IR_SEND_PIN = 3; // Define your IR transmitter pin
-const int RECV_PIN = 11;   // define input pin on Arduino to which the IR receiver is connected
-const int buzzerPin = 8;   // define output pin on Arduino to which the buzzer is connected
-const int buttonPin = 7;   // define input pin for the button for IRsend
-unsigned int buttonState = 0;     // variable to store the state of the button
-const int redLED = 9;      // define output pin on Arduino to which the red LED is connected
-const int carrierFrequency = 38; // Carrier frequency in kHz (common for many IR devices, adjust as needed)
-// Raw data for an IR signal
+const int IR_SEND_PIN     = 3;  // IR transmitter pin
+const int RECV_PIN        = 11; // IR receiver pin
+const int buzzerPin       = 8;  // Buzzer output pin
+const int buttonPin       = 2;  // Button pin — must be 2 or 3 on Uno for interrupts
+const int redLED          = 9;  // Red LED output pin
+const int carrierFrequency = 38; // 38 kHz carrier
+
 const uint16_t rawData[] = {
-    5000, 2500, 
     5000, 2500,
     5000, 2500,
-    5000, 2500}; // Mark: 5ms, Space: 2.5ms (example pattern)
-const int rawDataLength = sizeof(rawData) / sizeof(rawData[0]); // Length of the raw data array
-unsigned long buzzerStartTime = 0; // Track when the buzzer was activated
-bool buzzerActive = false; // Track if the buzzer is currently active
+    5000, 2500,
+    5000, 2500};
+const int rawDataLength = sizeof(rawData) / sizeof(rawData[0]);
 
-// put function declarations here:
-IRrecv irrecv(RECV_PIN); // Create IR receiver object
-IRsend irsend; // Create IR receiver and sender objects
-decode_results results; // decode_results class is defined in IRremote.h
+unsigned long buzzerStartTime = 0;
+bool buzzerActive = false;
+
+// volatile — shared between ISR and loop(), compiler must not cache this
+volatile uint8_t buttonPressed = 0;
+
+IRrecv irrecv(RECV_PIN);
+IRsend irsend;
+decode_results results;
+
+// ISR — called instantly by hardware when button pin falls LOW
+// Rule: do as little as possible here — just set the flag
+void buttonISR() {
+  buttonPressed = 1;
+}
 
 void setup()
 {
-  // put your setup code here, to run once:
-  pinMode(buzzerPin, OUTPUT); // Set buzzer pin as output
-  pinMode(redLED, OUTPUT);    // Set red LED pin as output
-  pinMode(buttonPin, INPUT); // Set button pin as input
-  irrecv.enableIRIn();        // Start the receiver
-  irsend.begin(IR_SEND_PIN);  // Initialize IR sender
-  Serial.begin(115200); //  Start serial communication at 115200 baud rate for debugging
-  Serial.println("Ready to send raw IR signal..."); // Print initial message to Serial
+  wdt_enable(WDTO_8S); // Watchdog: reboot if loop() stalls for more than 8 seconds
+
+  pinMode(buzzerPin, OUTPUT);
+  pinMode(redLED,    OUTPUT);
+  pinMode(buttonPin, INPUT_PULLUP); // Built-in pull-up: button pressed = LOW
+
+  // Attach interrupt to buttonPin — fires buttonISR() on falling edge (HIGH -> LOW)
+  attachInterrupt(digitalPinToInterrupt(buttonPin), buttonISR, FALLING);
+
+  irrecv.enableIRIn();
+  irsend.begin(IR_SEND_PIN);
+  Serial.begin(115200);
+  Serial.println("Ready — button on pin 2, watchdog active.");
+
+  wdt_reset(); // Pet the dog after setup in case setup() took a while
 }
 
 void loop()
 {
-  // put your main code here, to run repeatedly:
-  buttonState = digitalRead(buttonPin); // Read the state of the button
-  if (buttonState == HIGH) { // Check if the button is pressed  
-    irsend.sendRaw(rawData, rawDataLength, carrierFrequency); // Send the raw data with specified carrier frequency
-    Serial.println("IR signal sent."); // Print confirmation of IR signal transmission
+  // 1. Button check — flag set by ISR, handled here
+  if (buttonPressed) {
+    buttonPressed = 0; // Clear the flag first
+    irsend.sendRaw(rawData, rawDataLength, carrierFrequency);
+    Serial.println("IR signal sent.");
   }
+
+  // 2. IR receive
   if (irrecv.decode(&results))
   {
-    Serial.println(results.value, HEX); // Print the decoded value in hexadecimal format (for reference)
-    
-    // Activate buzzer and red LED for 1 second
+    Serial.println(results.value, HEX);
+
     digitalWrite(buzzerPin, HIGH);
-    digitalWrite(redLED, HIGH);
-    buzzerStartTime = millis();  // Record the time when the buzzer was activated
-    buzzerActive = true; // Set flag to indicate buzzer is active
-    
-    // Separately, check if 1 second has passed
+    digitalWrite(redLED,    HIGH);
+    buzzerStartTime = millis();
+    buzzerActive = true;
+
+    Serial.print("Raw timings: ");
+    for (int i = 0; i < results.rawlen; i++) {
+      Serial.print(results.rawbuf[i] * USECPERTICK);
+      Serial.print(", ");
+    }
+    Serial.println();
+    irrecv.resume();
+  }
+
+  // 3. Buzzer timeout — non-blocking, runs every loop
   if (buzzerActive && millis() - buzzerStartTime >= 1000)
   {
     digitalWrite(buzzerPin, LOW);
-    digitalWrite(redLED, LOW);
-    buzzerActive = false; // Reset flag after deactivating buzzer and LED
+    digitalWrite(redLED,    LOW);
+    buzzerActive = false;
   }
-    // Print captured raw timings to Serial (so you can copy real codes)
-    Serial.print("Raw timings: "); // Print label for raw timings
-    for (int i = 0; i < results.rawlen; i++) {
-      Serial.print(results.rawbuf[i] * USECPERTICK); // Convert ticks to microseconds
-      Serial.print(", "); // Print comma-separated values
-    }
 
-    Serial.println(); // New line after printing all timings
-    irrecv.resume(); // Receive the next value
-  }
+  // 4. Pet the watchdog — must reach here within 8s or MCU reboots
+  wdt_reset();
 }
-
-// put function definitions here:
